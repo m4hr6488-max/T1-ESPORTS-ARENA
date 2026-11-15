@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="bn"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>T1 ESPORTS ARENA — Admin</title>
+<style>
+:root{--bg:#0a0a0d;--panel:#17171d;--gold:#f2c45e;--line:#34343c}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#f6f2e8;font:15px system-ui;padding:20px}
+main{max-width:900px;margin:auto}.card{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:18px;margin:14px 0}
+h1,h2{color:var(--gold)}input,textarea,button{font:inherit;padding:11px;border-radius:8px;border:1px solid var(--line);width:100%;margin:6px 0;background:#101015;color:white}
+button{background:var(--gold);color:#1b1406;font-weight:800;cursor:pointer}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.item{border:1px solid var(--line);padding:12px;border-radius:10px;margin:10px 0;overflow-wrap:anywhere}
+.small{font-size:12px;color:#b8b1a1}.danger{background:#61252a;color:#fff}.hidden{display:none}
+@media(max-width:600px){.row{grid-template-columns:1fr}}
+</style></head><body><main>
+<h1>⚡ T1 ESPORTS ARENA — Admin Panel</h1>
+<p class="small">এই প্যানেল আলাদা URL-এ থাকবে: /admin/ । Supabase Auth ও profiles.role='admin' ছাড়া প্রবেশ করা যাবে না।</p>
+<section id="login" class="card"><h2>Admin Login</h2>
+<input id="email" type="email" placeholder="Admin email"><input id="password" type="password" placeholder="Password">
+<button id="loginBtn">Login</button><p id="status" class="small">প্রথমে supabase/config.js-এ Project URL ও Publishable Key বসাও।</p></section>
+<section id="dashboard" class="hidden">
+<div class="card"><div class="row"><div><h2>Publish Notification</h2><input id="title" placeholder="Update title"><textarea id="body" placeholder="Update message"></textarea><button id="publish">Publish to all players</button></div>
+<div><h2>Account</h2><p id="who" class="small"></p><button id="logout" class="danger">Logout</button></div></div></div>
+<div class="card"><h2>Published Notifications</h2><div id="announcements"></div></div>
+<div class="card"><h2>Manual Payment Settings</h2><p class="small">এখানে অফিসিয়াল bKash/Nagad/Rocket receiving number সেট করো।</p>
+<div class="row"><div><label>Method</label><select id="payMethod"><option value="bkash">bKash</option><option value="nagad">Nagad</option><option value="rocket">Rocket</option></select></div><div><label>Account type</label><select id="accountType"><option>Personal</option><option>Merchant</option><option>Agent</option></select></div></div>
+<input id="merchantNumber" placeholder="Official receiving number"><textarea id="payInstructions" placeholder="Player-দের জন্য নির্দেশনা (যেমন Send Money)"></textarea>
+<label><input id="methodEnabled" type="checkbox" checked style="width:auto"> Enable this payment method</label><button id="saveMethod">Save Payment Settings</button><div id="paymentSettingMsg" class="small"></div><div id="methodList"></div></div>
+<div class="card"><h2>Payment Requests</h2><p class="small">Transaction ID অফিসিয়াল merchant app/statement-এ যাচাই করার পরেই Approve করবে।</p><div id="payments"></div></div>
+</section></main>
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../supabase/config.js';
+const $=id=>document.getElementById(id);
+const sb=createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+let user=null;
+function msg(s){$('status').textContent=s}
+async function boot(){
+ if(SUPABASE_URL.includes('YOUR_')||SUPABASE_ANON_KEY.includes('YOUR_')){msg('Setup required: supabase/config.js-এ URL ও publishable key বসাও।');return}
+ const {data:{session}}=await sb.auth.getSession();user=session?.user||null;
+ if(user) await gate();
+}
+async function gate(){
+ if(!user){$('login').classList.remove('hidden');$('dashboard').classList.add('hidden');return}
+ const {data:p,error}=await sb.from('profiles').select('role,display_name').eq('id',user.id).single();
+ if(error||p?.role!=='admin'){msg('এই অ্যাকাউন্ট Admin নয়। Access denied.');await sb.auth.signOut();user=null;return}
+ $('login').classList.add('hidden');$('dashboard').classList.remove('hidden');$('who').textContent=p.display_name||user.email;
+ await Promise.all([loadAnnouncements(),loadPayments(),loadPaymentSettings()]);
+}
+$('loginBtn').onclick=async()=>{const {data,error}=await sb.auth.signInWithPassword({email:$('email').value,password:$('password').value});if(error){msg(error.message);return}user=data.user;await gate()};
+$('logout').onclick=async()=>{await sb.auth.signOut();user=null;await gate()};
+$('publish').onclick=async()=>{
+ const title=$('title').value.trim(),body=$('body').value.trim();if(!title||!body)return msg('Title ও message দাও।');
+ const {error}=await sb.from('announcements').insert({title,body,is_active:true});
+ if(error)return msg(error.message);$('title').value='';$('body').value='';msg('Update প্রকাশ হয়েছে।');await loadAnnouncements();
+};
+async function loadAnnouncements(){
+ const {data,error}=await sb.from('announcements').select('*').order('created_at',{ascending:false});
+ if(error)return $('announcements').textContent=error.message;
+ $('announcements').innerHTML=(data||[]).map(a=>`<div class="item"><b>${esc(a.title)}</b><p>${esc(a.body)}</p><span class="small">${a.is_active?'Active':'Hidden'}</span><div class="row"><button data-toggle="${a.id}" data-active="${a.is_active}">${a.is_active?'Hide':'Publish'}</button><button class="danger" data-delete="${a.id}">Delete</button></div></div>`).join('')||'No updates';
+ $('announcements').querySelectorAll('[data-toggle]').forEach(b=>b.onclick=async()=>{await sb.from('announcements').update({is_active:b.dataset.active!=='true'}).eq('id',b.dataset.toggle);await loadAnnouncements()});
+ $('announcements').querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{if(confirm('Delete this update?')){await sb.from('announcements').delete().eq('id',b.dataset.delete);await loadAnnouncements()}});
+}
+async function loadPaymentSettings(){
+ const {data,error}=await sb.from('merchant_payment_settings').select('*').order('method');
+ if(error){$('paymentSettingMsg').textContent=error.message;return}
+ $('methodList').innerHTML=(data||[]).map(m=>`<div class="item"><b>${esc(m.method.toUpperCase())}</b> — ${esc(m.merchant_number)} (${esc(m.account_type)}) — ${m.is_enabled?'Enabled':'Disabled'}</div>`).join('')||'No payment methods configured';
+}
+$('saveMethod').onclick=async()=>{
+ const method=$('payMethod').value,merchant_number=$('merchantNumber').value.trim(),account_type=$('accountType').value,instructions=$('payInstructions').value.trim(),is_enabled=$('methodEnabled').checked;
+ if(!merchant_number)return $('paymentSettingMsg').textContent='Receiving number required.';
+ const {error}=await sb.from('merchant_payment_settings').upsert({method,merchant_number,account_type,instructions,is_enabled,updated_by:user.id},{onConflict:'method'});
+ $('paymentSettingMsg').textContent=error?error.message:'Payment settings saved.';
+ if(!error)await loadPaymentSettings();
+};
+async function loadPayments(){
+ const {data,error}=await sb.from('payment_requests').select('*').order('created_at',{ascending:false});
+ if(error)return $('payments').textContent=error.message;
+ $('payments').innerHTML=(data||[]).map(p=>`<div class="item"><b>${esc(p.method)} — ৳${p.amount}</b><p class="small">User: ${esc(p.user_id)}<br>Transaction: ${esc(p.transaction_ref||'—')}<br>Status: ${esc(p.status)}</p>${p.status==='pending'?`<button data-approve="${p.id}">Approve payment</button>`:''}</div>`).join('')||'No requests';
+ $('payments').querySelectorAll('[data-approve]').forEach(b=>b.onclick=async()=>{if(!confirm('Transaction যাচাই করেছ? Approve করলে wallet credit হবে।'))return;
+ const {error}=await sb.rpc('admin_approve_payment',{request_id:b.dataset.approve});if(error)alert(error.message);await loadPayments()});
+}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+sb.auth.onAuthStateChange((_e,s)=>{user=s?.user||null;setTimeout(gate,0)});
+boot();
+</script></body></html>
