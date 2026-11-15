@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="bn"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>T1 ESPORTS ARENA — Manual Payment</title>
+<style>
+:root{--bg:#090a0e;--panel:#171820;--gold:#f2c45e;--line:#343744}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#f5f2e9;font:15px system-ui;padding:18px}
+main{max-width:720px;margin:auto}h1,h2{color:var(--gold)}.card{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:17px;margin:14px 0}
+input,select,button{display:block;width:100%;padding:12px;margin:8px 0;border-radius:9px;border:1px solid var(--line);background:#0d0f15;color:#fff;font:inherit}
+button{background:var(--gold);color:#1b1406;font-weight:800;cursor:pointer}.method{border:1px solid var(--line);padding:12px;border-radius:10px;margin:10px 0}
+.muted{color:#b9b4a8;font-size:12px;line-height:1.6}.status{font-weight:800}.pending{color:#f4ca68}.approved{color:#7ee0a2}.rejected{color:#ff8585}.hidden{display:none}
+</style></head><body><main>
+<h1>⚡ T1 ESPORTS ARENA</h1><p class="muted">Manual bKash / Nagad / Rocket Deposit. কোনো PIN বা OTP কখনো দেবে না।</p>
+<section id="auth" class="card"><h2>Player Login</h2><input id="email" type="email" placeholder="Email"><input id="password" type="password" placeholder="Password"><button id="login">Login</button><p class="muted">অ্যাকাউন্ট না থাকলে Supabase Auth-এ আগে Sign Up করো।</p><div id="msg" class="muted"></div></section>
+<section id="payment" class="hidden">
+<div class="card"><h2>Payment Instructions</h2><p class="muted">নিচের নম্বরে Admin-এর নির্দেশনা অনুযায়ী পেমেন্ট করো। তারপর Transaction ID জমা দাও। Admin যাচাই না করা পর্যন্ত Wallet-এ টাকা যোগ হবে না।</p><div id="methods"></div></div>
+<div class="card"><h2>Submit Deposit Request</h2>
+<label>Payment method</label><select id="method"></select><label>Amount (BDT)</label><input id="amount" type="number" min="1" max="50000" step="1" placeholder="e.g. 100">
+<label>Your sender mobile number</label><input id="sender" inputmode="tel" maxlength="20" placeholder="01XXXXXXXXX">
+<label>Transaction ID</label><input id="trx" maxlength="100" placeholder="Enter exact TrxID">
+<button id="submit">Submit for Admin Verification</button><div id="formmsg" class="muted"></div></div>
+<div class="card"><h2>My Deposit Requests</h2><div id="history" class="muted">No requests yet.</div><button id="logout">Logout</button></div>
+</section></main>
+<script type="module">
+import {createClient} from 'https://esm.sh/@supabase/supabase-js@2';
+import {SUPABASE_URL,SUPABASE_ANON_KEY} from '../supabase/config.js';
+const $=id=>document.getElementById(id),sb=createClient(SUPABASE_URL,SUPABASE_ANON_KEY);let user=null;
+function say(id,s){$(id).textContent=s}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+async function load(){const {data:{session}}=await sb.auth.getSession();user=session?.user||null;$('auth').classList.toggle('hidden',!!user);$('payment').classList.toggle('hidden',!user);if(user)await Promise.all([loadMethods(),loadHistory()])}
+async function loadMethods(){
+ const {data,error}=await sb.from('merchant_payment_settings').select('*').eq('is_enabled',true);
+ if(error){$('methods').textContent=error.message;return}
+ $('methods').innerHTML=(data||[]).map(m=>`<div class="method"><b>${esc(m.method.toUpperCase())} — ${esc(m.account_type)}</b><p>নম্বর: <strong>${esc(m.merchant_number)}</strong></p><p class="muted">${esc(m.instructions||'প্রদত্ত নির্দেশনা অনুসরণ করো।')}</p></div>`).join('')||'Admin এখনো কোনো পেমেন্ট নম্বর চালু করেনি।';
+ $('method').innerHTML=(data||[]).map(m=>`<option value="${esc(m.method)}">${esc(m.method.toUpperCase())}</option>`).join('');
+}
+async function loadHistory(){
+ const {data,error}=await sb.from('payment_requests').select('id,amount,method,transaction_ref,status,created_at').eq('user_id',user.id).order('created_at',{ascending:false});
+ if(error){$('history').textContent=error.message;return}
+ $('history').innerHTML=(data||[]).map(p=>`<div class="method"><b>৳${Number(p.amount).toFixed(2)} — ${esc(p.method.toUpperCase())}</b><p>TrxID: ${esc(p.transaction_ref)}</p><span class="status ${esc(p.status)}">${esc(p.status.toUpperCase())}</span></div>`).join('')||'No requests yet.';
+}
+$('login').onclick=async()=>{const {data,error}=await sb.auth.signInWithPassword({email:$('email').value,password:$('password').value});if(error)return say('msg',error.message);user=data.user;await load()};
+$('submit').onclick=async()=>{
+ const amount=Number($('amount').value),method=$('method').value,sender=$('sender').value.trim(),trx=$('trx').value.trim();
+ if(!Number.isFinite(amount)||amount<1||amount>50000||!sender||!trx)return say('formmsg','সঠিক Amount, Sender Number এবং Transaction ID দাও।');
+ $('submit').disabled=true;
+ const {error}=await sb.from('payment_requests').insert({user_id:user.id,amount,method,sender_number:sender,transaction_ref:trx,status:'pending'});
+ $('submit').disabled=false;
+ if(error)return say('formmsg',error.code==='23505'?'এই Transaction ID আগে জমা হয়েছে।':error.message);
+ say('formmsg','Request জমা হয়েছে। Admin যাচাই করলে Status আপডেট হবে।');$('amount').value='';$('sender').value='';$('trx').value='';await loadHistory();
+};
+$('logout').onclick=async()=>{await sb.auth.signOut();await load()};
+sb.auth.onAuthStateChange(()=>setTimeout(load,0));load();
+</script></body></html>
